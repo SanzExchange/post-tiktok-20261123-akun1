@@ -17,6 +17,13 @@
 // Day 7: arena yang sama, start yang sama — dinding bata penuh, partikel,
 // trail, bola ganda, HUD skor. Semua gerak deterministik dari waktu t,
 // jadi frame apa pun bisa di-render ulang persis dari ?day=N&t=detik.
+//
+// Kreatif video (keputusan di sesi ini): hook-nya kontras day-1 vs day-7
+// yang langsung terbaca dalam 2 detik pertama — arena kosong lalu cut ke
+// momen identik yang penuh. Kamera diam supaya perubahannya yang jadi
+// cerita; warna neon + bola yang terus bergerak menahan penonton di layar
+// kecil. Ditutup build day-7 yang sedang dimainkan + "Start yours at
+// make.fun", lalu end card referral make.fun dengan kode akun ini.
 const W = 1080, H = 1920;
 const cv = document.getElementById('game');
 const ctx = cv.getContext('2d');
