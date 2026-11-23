@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NEON PADDLE ARENA — Akun 1 (@sanzex)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #050510; overflow: hidden; }
+  canvas { display: block; width: 1080px; height: 1920px; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1080" height="1920"></canvas>
+<script>
+// NEON PADDLE ARENA — Akun 1 (@sanzex), game kecil buatan agen untuk bounty
+// "Day one, day seven": game yang sama, momen identik, kamera diam.
+// Day 1: arena nyaris kosong — paddle + 1 bola + 3 bata.
+// Day 7: arena yang sama, start yang sama — dinding bata penuh, partikel,
+// trail, bola ganda, HUD skor. Semua gerak deterministik dari waktu t,
+// jadi frame apa pun bisa di-render ulang persis dari ?day=N&t=detik.
+const W = 1080, H = 1920;
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const PADDLE_Y = 1680, PADDLE_W = 280, PADDLE_H = 34;
+const BALL_R = 26;
+
+function freshState(day) {
+  const rng = mulberry32(day === 7 ? 777 : 111);
+  const bricks = [];
+  if (day === 1) {
+    // Day 1: hanya 3 bata di tengah atas.
+    for (let i = 0; i < 3; i++) {
+      bricks.push({ x: 390 + i * 110, y: 420, w: 96, h: 44, alive: true,
+        color: ['#22d3ee', '#f472b6', '#a3e635'][i] });
+    }
+  } else {
+    // Day 7: dinding bata penuh 6 baris x 8 kolom, arena yang sama.
+    const cols = ['#22d3ee', '#f472b6', '#a3e635', '#facc15', '#a78bfa', '#fb7185'];
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 8; c++) {
+        bricks.push({ x: 60 + c * 122, y: 400 + r * 62, w: 108, h: 48,
+          alive: true, color: cols[r % cols.length] });
+      }
+    }
+  }
+  return {
+    day,
+    ball: { x: 540, y: 1500, vx: 420, vy: -620, active: true },
+    // Day 7: bola kedua masuk di t = 2.0, start sama, arah cermin.
+    ball2: { x: 540, y: 1500, vx: -420, vy: -620, active: false },
+    paddleX: 540,
+    bricks,
+    particles: [],
+    trail: [],
+    floats: [],
+    score: 0,
+    rng,
+    t: 0
+  };
+}
+
+function stepBall(s, b, dt) {
+  b.x += b.vx * dt;
+  b.y += b.vy * dt;
+  if (b.x < 60 + BALL_R) { b.x = 60 + BALL_R; b.vx = Math.abs(b.vx); }
+  if (b.x > 1020 - BALL_R) { b.x = 1020 - BALL_R; b.vx = -Math.abs(b.vx); }
+  if (b.y < 300 + BALL_R) { b.y = 300 + BALL_R; b.vy = Math.abs(b.vy); }
+  // Paddle: pantul, sudut ikut offset dari tengah paddle.
+  if (b.vy > 0 && b.y + BALL_R >= PADDLE_Y && b.y + BALL_R <= PADDLE_Y + PADDLE_H + 30 &&
+      Math.abs(b.x - s.paddleX) <= PADDLE_W / 2 + BALL_R) {
+    const off = (b.x - s.paddleX) / (PADDLE_W / 2);
+    const speed = Math.hypot(b.vx, b.vy);
+    const ang = -Math.PI / 2 + off * 0.9;
+    b.vx = Math.cos(ang) * speed;
+    b.vy = Math.sin(ang) * speed;
+    b.y = PADDLE_Y - BALL_R;
+  }
+  if (b.y > H + 60) { // jatuh: reset ke start yang sama
+    b.x = 540; b.y = 1500;
+    b.vx = b.vx >= 0 ? 420 : -420; b.vy = -620;
+  }
+  // Bata: tabrakan lingkaran vs kotak, hancurkan satu bata per langkah.
+  for (const br of s.bricks) {
+    if (!br.alive) continue;
+    const nx = Math.max(br.x, Math.min(b.x, br.x + br.w));
+    const ny = Math.max(br.y, Math.min(b.y, br.y + br.h));
+    const dx = b.x - nx, dy = b.y - ny;
+    if (dx * dx + dy * dy <= BALL_R * BALL_R) {
+      br.alive = false;
+      s.score += 100;
+      s.floats.push({ x: br.x + br.w / 2, y: br.y, txt: '+100', life: 0.9, max: 0.9 });
+      if (Math.abs(dx) > Math.abs(dy)) b.vx = dx > 0 ? Math.abs(b.vx) : -Math.abs(b.vx);
+      else b.vy = dy > 0 ? Math.abs(b.vy) : -Math.abs(b.vy);
+      if (s.day === 7) {
+        for (let i = 0; i < 12; i++) {
+          const a = s.rng() * Math.PI * 2, sp = 120 + s.rng() * 320;
+          s.particles.push({ x: br.x + br.w / 2, y: br.y + br.h / 2,
+            vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+            life: 0.7, max: 0.7, color: br.color, r: 3 + s.rng() * 5 });
+        }
+      }
+      break;
+    }
+  }
+}
+
+function step(s, dt) {
+  s.t += dt;
+  // Paddle AI: kejar bola utama, kecepatan dibatasi — terlihat dimainkan.
+  const target = s.ball.x;
+  const maxStep = 950 * dt;
+  s.paddleX += Math.max(-maxStep, Math.min(maxStep, target - s.paddleX));
+  s.paddleX = Math.max(60 + PADDLE_W / 2, Math.min(1020 - PADDLE_W / 2, s.paddleX));
+  if (s.day === 7 && s.t >= 2.0) s.ball2.active = true;
+  stepBall(s, s.ball, dt);
+  if (s.ball2.active) stepBall(s, s.ball2, dt);
+  if (s.day === 7) {
+    s.trail.push({ x: s.ball.x, y: s.ball.y });
+    if (s.trail.length > 14) s.trail.shift();
+  }
+  for (const p of s.particles) {
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 500 * dt; p.life -= dt;
+  }
+  s.particles = s.particles.filter(p => p.life > 0);
+  for (const f of s.floats) { f.y -= 60 * dt; f.life -= dt; }
+  s.floats = s.floats.filter(f => f.life > 0);
+}
+
+function draw(s) {
+  // Latar: gradasi gelap + grid redup. Kamera diam — tidak ada yang bergerak
+  // kecuali isi gamenya.
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0b0620'); g.addColorStop(0.55, '#0a1030'); g.addColorStop(1, '#050510');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = 'rgba(120,140,255,0.07)'; ctx.lineWidth = 2;
+  for (let x = 60; x <= 1020; x += 60) { ctx.beginPath(); ctx.moveTo(x, 300); ctx.lineTo(x, 1780); ctx.stroke(); }
+  for (let y = 300; y <= 1780; y += 60) { ctx.beginPath(); ctx.moveTo(60, y); ctx.lineTo(1020, y); ctx.stroke(); }
+  // Dinding arena.
+  ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 6;
+  ctx.shadowColor = '#22d3ee'; ctx.shadowBlur = 18;
+  ctx.strokeRect(60, 300, 960, 1480);
+  ctx.shadowBlur = 0;
+  // Bintang / sparkle latar (day 7 saja).
+  if (s.day === 7) {
+    const rng2 = mulberry32(42);
+    for (let i = 0; i < 40; i++) {
+      const x = 80 + rng2() * 920, y = 320 + rng2() * 1420;
+      const tw = 0.4 + 0.6 * Math.abs(Math.sin(s.t * 2 + i));
+      ctx.globalAlpha = tw * 0.8;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x, y, 4, 4);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // Bata.
+  for (const br of s.bricks) {
+    if (!br.alive) continue;
+    ctx.fillStyle = br.color;
+    ctx.shadowColor = br.color; ctx.shadowBlur = 16;
+    ctx.fillRect(br.x, br.y, br.w, br.h);
+  }
+  ctx.shadowBlur = 0;
+  // Trail bola (day 7).
+  if (s.day === 7) {
+    s.trail.forEach((p, i) => {
+      ctx.globalAlpha = (i / s.trail.length) * 0.45;
+      ctx.fillStyle = '#f472b6';
+      ctx.beginPath(); ctx.arc(p.x, p.y, BALL_R * (0.4 + 0.6 * i / s.trail.length), 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+  }
+  // Partikel.
+  for (const p of s.particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  // Paddle.
+  ctx.fillStyle = '#22d3ee';
+  ctx.shadowColor = '#22d3ee'; ctx.shadowBlur = 24;
+  roundRect(s.paddleX - PADDLE_W / 2, PADDLE_Y, PADDLE_W, PADDLE_H, 17);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // Bola.
+  drawBall(s.ball, '#ffffff', '#f472b6');
+  if (s.ball2.active) drawBall(s.ball2, '#ffffff', '#a78bfa');
+  // Skor mengambang.
+  ctx.font = 'bold 44px monospace'; ctx.textAlign = 'center';
+  for (const f of s.floats) {
+    ctx.globalAlpha = Math.max(0, f.life / f.max);
+    ctx.fillStyle = '#facc15'; ctx.fillText(f.txt, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+  // Label hari + judul (bagian dari footage).
+  ctx.textAlign = 'center';
+  ctx.font = '900 120px monospace';
+  ctx.fillStyle = s.day === 1 ? '#22d3ee' : '#f472b6';
+  ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 30;
+  ctx.fillText(s.day === 1 ? 'DAY 1' : 'DAY 7', 540, 210);
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 44px monospace';
+  ctx.fillStyle = '#e2e8f0';
+  ctx.fillText('NEON PADDLE ARENA', 540, 268);
+  // HUD skor (day 7).
+  if (s.day === 7) {
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 52px monospace';
+    ctx.fillStyle = '#facc15';
+    ctx.fillText('SCORE ' + s.score, 1000, 1820);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#a78bfa';
+    ctx.fillText('x2 BALLS', 80, 1820);
+    // Ajakan di 2 detik terakhir segmen day-7.
+    if (s.t >= 5.0) {
+      ctx.textAlign = 'center';
+      ctx.font = '900 64px monospace';
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = '#f472b6'; ctx.shadowBlur = 26;
+      ctx.fillText('Start yours at make.fun', 540, 960);
+      ctx.shadowBlur = 0;
+    }
+  }
+}
+
+function drawBall(b, core, glow) {
+  ctx.fillStyle = glow;
+  ctx.shadowColor = glow; ctx.shadowBlur = 28;
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = core;
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R * 0.55, 0, Math.PI * 2); ctx.fill();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Render deterministik: simulasi dari t=0 sampai t yang diminta, lalu gambar.
+function renderAt(day, t) {
+  const s = freshState(day);
+  const dt = 1 / 120;
+  let elapsed = 0;
+  while (elapsed + dt <= t + 1e-9) { step(s, dt); elapsed += dt; }
+  if (elapsed < t) step(s, t - elapsed);
+  draw(s);
+  return s;
+}
+window.renderAt = renderAt;
+
+// Live play: animasi dari ?day & ?t bila dibuka di browser biasa.
+(function () {
+  const q = new URLSearchParams(location.search);
+  const day = parseInt(q.get('day') || '1', 10);
+  const t0 = parseFloat(q.get('t') || '0');
+  renderAt(day, t0);
+  let last = performance.now();
+  let t = t0;
+  function loop(now) {
+    t += Math.min(0.1, (now - last) / 1000);
+    last = now;
+    renderAt(day, t);
+    requestAnimationFrame(loop);
+  }
+  if (!q.has('t')) requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
